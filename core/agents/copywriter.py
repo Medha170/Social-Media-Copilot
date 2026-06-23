@@ -1,8 +1,8 @@
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from core.states import AgentState
 
 # Initialize the LLM with a temperature of 0.7 for strong, engaging copy variations
-llm = ChatOpenAI(model="gpt-4o", temperature=0.7)
+llm = ChatOllama(model="llama3", temperature=0.6)
 
 def platform_copywriter_node(state: AgentState) -> dict:
     """

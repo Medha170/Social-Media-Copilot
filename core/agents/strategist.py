@@ -1,8 +1,8 @@
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from core.states import AgentState, StrategyBrief
 
 # Initialize the Language Model with high creativity for strategic angles
-llm = ChatOpenAI(model="gpt-4o", temperature=0.7)
+llm = ChatOllama(model="llama3", temperature=0.6)
 
 def trend_strategist_node(state: AgentState) -> dict:
     """
