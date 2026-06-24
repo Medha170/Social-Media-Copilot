@@ -58,7 +58,7 @@ social-media-copilot/
 ```bash
 pip install -r requirements.txt
 cp .env.example .env            # then fill in your keys
-ollama pull llama3              # local LLM (install Ollama first)
+ollama pull llama3.1            # local LLM (install Ollama first)
 ```
 
 Keys used (see `.env.example`):
