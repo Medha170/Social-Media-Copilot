@@ -1,46 +1,48 @@
 from langchain_ollama import ChatOllama
 from core.states import AgentState
 
-# Initialize the LLM with a temperature of 0.7 for strong, engaging copy variations
-llm = ChatOllama(model="llama3", temperature=0.6)
+llm = ChatOllama(model="llama3.1", temperature=0.6)
 
 def platform_copywriter_node(state: AgentState) -> dict:
     """
-    Agent 2: Transforms a structured strategy brief into platform-native 
-    content for LinkedIn and Instagram, handling revisions if feedback exists.
+    Agent 2: Multi-Platform Execution Copywriter. Consumes the strategy brief 
+    to draft native text variations, handling refinement iterations dynamically.
     """
     topic = state["topic"]
     brief = state["strategy_brief"]
     feedback = state.get("feedback", None)
     
-    # Base system prompt defining the persona and formatting instructions
     system_instruction = (
-        "You are an expert Copywriter and Multi-Platform Content Creator.\n\n"
-        "Your task is to review a structured Strategy Brief and turn it into two distinct pieces of content:\n"
-        "1. A LINKEDIN POST: Professional, punchy, well-spaced text utilizing bold headers, bulleted takeaways, and clear line breaks.\n"
-        "2. AN INSTAGRAM BRIEF: An explicit scene-by-scene script/visual directive layout for a Reel or Carousel, followed by a highly catchy Instagram caption (with a strong initial hook line) and an SEO hashtag block.\n\n"
-        "Always separate the LinkedIn post from the Instagram brief using a clear string delimiter: '===PLATFORM_SPLIT==='"
+        "You are an elite multi-platform copywriter specializing in developer and technical creator growth.\n\n"
+        "Review the Strategy Brief and produce two distinct channel variants:\n"
+        "1. LINKEDIN POST: Professional, punchy tone. Use clean headers, broad paragraph breaks, and actionable bullet points.\n"
+        "2. INSTAGRAM BRIEF: Provide explicit step-by-step visual storyboard directives for a Carousel/Reel, followed by an engaging caption with a high-retention 3-second hook line and a targeted SEO hashtag cluster.\n\n"
+        "CRITICAL COMPLIANCE RULES:\n"
+        "- Do not combine the sections into a single markdown article.\n"
+        "- You MUST split the LinkedIn post from the Instagram brief using the exact literal token string: '===PLATFORM_SPLIT==='\n"
+        "- Example format:\n"
+        "[Insert LinkedIn content here]\n"
+        "===PLATFORM_SPLIT===\n"
+        "[Insert Instagram storyboard, caption, and hashtags here]"
     )
     
-    # Construct user message incorporating the structured brief data
     user_message = (
-        f"Core Topic: {topic}\n"
-        f"Strategy Angle: {brief.hook_angle}\n"
-        f"Key Pillars to hit: {', '.join(brief.key_pillars)}\n"
-        f"Target Keywords: {', '.join(brief.trending_keywords)}\n\n"
+        f"Topic: {topic}\n"
+        f"Angle: {brief.hook_angle}\n"
+        f"Required Core Pillars: {', '.join(brief.key_pillars)}\n"
+        f"Algorithmic Target Keywords: {', '.join(brief.trending_keywords)}\n\n"
     )
     
-    # Critical Logic: If the Reviewer rejected the previous draft, force a revision path
-    if feedback and not state["review_approved"]:
+    # Dynamic loop handling
+    if feedback and not state.get("review_approved", False):
         user_message += (
-            f"⚠️ ATTENTION: Your previous draft was REJECTED by the Quality Reviewer.\n"
-            f"Critique/Feedback to fix: {feedback}\n"
-            f"Please rewrite the drafts, making sure to fully resolve this critique."
+            f"⚠️ CRITICAL REVISION REQUESTED:\n"
+            f"Your previous attempt was rejected by our Quality Reviewer with this feedback: '{feedback}'\n"
+            f"Modify your approach to perfectly address this critique while preserving the core elements."
         )
     else:
-        user_message += "Generate the initial platform drafts now."
+        user_message += "Generate the initial platform variations now."
 
-    # Invoke the LLM
     response = llm.invoke([
         {"role": "system", "content": system_instruction},
         {"role": "user", "content": user_message}
@@ -48,23 +50,18 @@ def platform_copywriter_node(state: AgentState) -> dict:
     
     raw_output = response.content
     
-    # Parse the text to separate the two platform components cleanly
-    linkedin_content = ""
-    instagram_content = ""
-    
+    # Parse text cleanly across platform buffers
     if "===PLATFORM_SPLIT===" in raw_output:
         parts = raw_output.split("===PLATFORM_SPLIT===")
         linkedin_content = parts[0].strip()
         instagram_content = parts[1].strip()
     else:
-        # Fallback split if the LLM omits the exact token
+        # Graceful fallback to avoid unhandled extraction faults
         linkedin_content = raw_output
-        instagram_content = "Instagram Brief generation failed to split properly. Retrying via graph loop may be required."
+        instagram_content = "Instagram Generation Error: Platform boundary missing during generation."
 
-    # Return the dictionary updates to be merged into the central Graph State
     return {
         "linkedin_draft": linkedin_content,
         "instagram_caption": instagram_content,
-        # We split visual scripts out into its own key if needed, or bundle it here for convenience
-        "instagram_visual_brief": "Visual structure embedded in caption payload."
+        "instagram_visual_brief": "Visual storyboard embedded inside the caption payload."
     }

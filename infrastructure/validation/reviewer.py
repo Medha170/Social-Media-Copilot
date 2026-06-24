@@ -18,7 +18,7 @@ from langchain_ollama import ChatOllama
 from core.states import AgentState, ReviewResult
 
 # Deterministic temperature: the reviewer should be consistent, not creative.
-llm = ChatOllama(model="llama3", temperature=0.0)
+llm = ChatOllama(model="llama3.1", temperature=0.0)
 
 # --- Guardrail thresholds ---
 LINKEDIN_MIN_WORDS = 40
