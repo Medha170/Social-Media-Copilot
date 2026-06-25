@@ -16,3 +16,6 @@ tiktoken==0.7.0
 
 # --- Observability ---
 langsmith>=0.1.80,<0.2.0
+
+# --- Demo UI ---
+streamlit>=1.30,<2.0
