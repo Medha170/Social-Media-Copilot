@@ -8,6 +8,7 @@ approval gate that the graph exposes through ``interrupt_before=["reviewer"]``.
 import os
 import sys
 import uuid
+import contextlib
 import traceback
 from datetime import datetime
 
@@ -18,6 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 st.set_page_config(page_title="Social Media Co-Pilot", page_icon="🤖", layout="wide")
 
+MODEL_NAME = "llama3.1"
+
 # --- Import the compiled graph defensively so the UI always launches ---------
 GRAPH_IMPORT_ERROR = None
 compiled_graph = None
@@ -25,6 +28,19 @@ try:
     from core.graph import compiled_internal_graph as compiled_graph
 except Exception as exc:  # missing deps, import-time failures, etc.
     GRAPH_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+
+# --- LangSmith observability detection ---------------------------------------
+# configure_langsmith() runs at graph import; it sets these env vars when a key
+# is present. Reading them here tells us whether traces are being recorded.
+TRACING_ON = bool(os.getenv("LANGCHAIN_API_KEY") or os.getenv("LANGSMITH_API_KEY"))
+LANGSMITH_PROJECT = (
+    os.getenv("LANGCHAIN_PROJECT") or os.getenv("LANGSMITH_PROJECT") or "social-media-copilot"
+)
+
+try:
+    from langchain_core.tracers.context import tracing_v2_enabled
+except Exception:
+    tracing_v2_enabled = None
 
 
 # =====================================================================
@@ -97,6 +113,7 @@ def init_state():
     st.session_state.setdefault("phase", "idle")  # idle | paused | final
     st.session_state.setdefault("thread_id", None)
     st.session_state.setdefault("snapshot", {})
+    st.session_state.setdefault("traces", [])  # [{label, url}] LangSmith trace links
 
 
 init_state()
@@ -118,7 +135,27 @@ def _merge_snapshot(node_name: str, payload: dict):
     log_event("node", f"Agent step complete → {node_name}", f"updated: {summary_keys}")
 
 
-def advance(graph_input):
+def _trace_context():
+    """LangSmith trace span for one graph advance, or a no-op when tracing is off."""
+    if TRACING_ON and tracing_v2_enabled is not None:
+        return tracing_v2_enabled(project_name=LANGSMITH_PROJECT)
+    return contextlib.nullcontext()
+
+
+def _record_trace(tracer, label):
+    """Capture a clickable LangSmith run URL from the tracer, if available."""
+    if tracer is None:
+        return
+    try:
+        url = tracer.get_run_url()
+    except Exception:
+        url = None
+    if url:
+        st.session_state.traces.append({"label": label, "url": url})
+        log_event("system", "LangSmith trace recorded", label)
+
+
+def advance(graph_input, trace_label="Pipeline run"):
     """Stream the graph forward until it interrupts (HITL) or finishes.
 
     ``graph_input`` is the initial state dict for a fresh run, or ``None`` to
@@ -126,9 +163,11 @@ def advance(graph_input):
     """
     config = _config()
     try:
-        for chunk in compiled_graph.stream(graph_input, config, stream_mode="updates"):
-            for node_name, payload in chunk.items():
-                _merge_snapshot(node_name, payload)
+        with _trace_context() as tracer:
+            for chunk in compiled_graph.stream(graph_input, config, stream_mode="updates"):
+                for node_name, payload in chunk.items():
+                    _merge_snapshot(node_name, payload)
+            _record_trace(tracer, trace_label)
     except Exception as exc:
         log_event("error", "Graph execution failed", f"{type(exc).__name__}: {exc}")
         log_event("error", "Traceback", traceback.format_exc()[-1500:])
@@ -174,20 +213,75 @@ def apply_human_decision(action, edited_linkedin, edited_instagram, current):
 # =====================================================================
 # UI
 # =====================================================================
+st.markdown(
+    """
+    <style>
+      .block-container {padding-top: 2.2rem;}
+      div[data-testid="stMetric"] {
+        background: #f7f8fa; border: 1px solid #e6e8eb;
+        border-radius: 10px; padding: 12px 16px;
+      }
+      .ls-badge {
+        display:inline-block; padding:3px 10px; border-radius:999px;
+        font-size:0.8rem; font-weight:600;
+      }
+      .ls-on  {background:#e7f6ec; color:#137333; border:1px solid #b7e1c5;}
+      .ls-off {background:#f1f3f4; color:#5f6368; border:1px solid #dadce0;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("🤖 Multi-Agent Social Media Co-Pilot")
 st.caption("Trend Strategist → Platform Copywriter → (human review) → Guardrails Reviewer")
+
+snap = st.session_state.snapshot
+
+# ---- Status strip -----------------------------------------------------------
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("LangSmith tracing", "On" if TRACING_ON else "Off")
+m2.metric("Model", MODEL_NAME)
+m3.metric("Stage", st.session_state.phase.capitalize())
+m4.metric("Revision loops", snap.get("loop_count", 0))
+
+# ---- Sidebar: observability + setup ----------------------------------------
+with st.sidebar:
+    st.header("🔭 Observability")
+    badge = (
+        '<span class="ls-badge ls-on">● TRACING ON</span>'
+        if TRACING_ON
+        else '<span class="ls-badge ls-off">● TRACING OFF</span>'
+    )
+    st.markdown(badge, unsafe_allow_html=True)
+    st.caption(
+        "LangSmith records every step the agents take — each LLM call and tool "
+        "call, with its inputs, outputs, latency and token usage — as a replayable "
+        "**trace**."
+    )
+    if TRACING_ON:
+        st.markdown(f"**Project:** `{LANGSMITH_PROJECT}`")
+        st.link_button("Open project in LangSmith ↗", "https://smith.langchain.com")
+    else:
+        st.info("Set `LANGCHAIN_API_KEY` in `.env` to record traces, then refresh.")
+
+    if st.session_state.traces:
+        st.markdown("**Traces from this session**")
+        for i, tr in enumerate(reversed(st.session_state.traces), 1):
+            st.markdown(f"{i}. [{tr['label']} ↗]({tr['url']})")
+
+    st.divider()
+    st.header("⚙️ Setup")
+    st.markdown(
+        "1. `pip install -r requirements.txt`\n"
+        "2. Start Ollama · `ollama pull llama3.1`\n"
+        "3. (optional) copy `.env.example` → `.env` for live search + LangSmith"
+    )
 
 if GRAPH_IMPORT_ERROR:
     st.error(
         "The agent graph could not be loaded, so runs are disabled. "
-        "Fix setup, then refresh.\n\n"
+        "Fix setup (see sidebar), then refresh.\n\n"
         f"**Import error:** `{GRAPH_IMPORT_ERROR}`"
-    )
-    st.info(
-        "**Setup checklist**\n"
-        "1. `pip install -r requirements.txt`\n"
-        "2. Start Ollama and run `ollama pull llama3.1`\n"
-        "3. (optional) copy `.env.example` to `.env` for live search + tracing"
     )
 
 col_main, col_log = st.columns([3, 2])
@@ -205,10 +299,8 @@ with col_main:
         st.session_state.thread_id = str(uuid.uuid4())
         st.session_state.snapshot = {}
         log_event("system", "Pipeline started", f"Topic: {topic!r} · thread {st.session_state.thread_id[:8]}")
-        advance({"topic": topic, "loop_count": 0})
+        advance({"topic": topic, "loop_count": 0}, trace_label="Pipeline run")
         st.rerun()
-
-    snap = st.session_state.snapshot
 
     # ---- Strategy brief -----------------------------------------------------
     brief = snap.get("strategy_brief")
@@ -241,7 +333,7 @@ with col_main:
                     st.session_state.snapshot.update(updates)
                 except Exception as exc:
                     log_event("error", "Failed to apply human edits", str(exc))
-            advance(None)
+            advance(None, trace_label=f"Human review → reviewer ({action})")
             st.rerun()
 
     # ---- Final drafts -------------------------------------------------------
@@ -270,6 +362,7 @@ with col_main:
             st.session_state.phase = "idle"
             st.session_state.snapshot = {}
             st.session_state.thread_id = None
+            st.session_state.traces = []
             log_event("system", "Reset", "Ready for a new topic.")
             st.rerun()
 
